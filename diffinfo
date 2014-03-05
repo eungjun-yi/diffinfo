@@ -1,0 +1,128 @@
+#!/usr/bin/python
+# usage: svn diff | diffinfo
+""" analysis a patch and report the result """
+
+# TODO: get chunks first - from the line start with @ to the line start without whitespace, '-', '+'
+# TODO: identify what parameter of function is removed and added
+
+import os, sys, re
+from optparse import OptionParser
+
+method_matchs = {
+    ".java": lambda line: re.findall(r'\w+\s+\b([^\s]*)\b\s*\([^\)]*\)\s*{', line),
+    ".js": lambda line: re.findall(r'\bfunction\b\s+([^\(]+)', line) + re.findall(r'(\w*)\s*=\s*\bfunction\b', line),
+    ".php": lambda line: re.findall('^\s*(?:public)?\s*(?:static)?\s*function\s+([^\(]+)', line)
+}
+
+def analysis(lines):
+    modified_functions = {'added': [], 'deleted': []}
+    modified_lines = {'added': [], 'deleted': []}
+
+    # this detection code may lose some code likes '-- '
+    for line in lines:
+        filenames = re.findall(r'^(?:\+\+\+|\-\-\-)\s+(.*)', line)
+        if len(filenames) > 0:
+            ext = os.path.splitext(filenames[0])[1].lower()
+            if method_matchs.has_key(ext):
+                method_match = method_matchs[ext]
+            else:
+                method_match = method_matchs['.java']
+
+        if re.findall(r'^\+', line) and not re.findall(r'^\+\+\+ ', line):
+            type = 'added'
+        elif re.findall(r'^\-', line) and not re.findall(r'^\-\-\- ', line):
+            type = 'deleted'
+        else:
+            continue
+
+        line = line[1:]
+        modified_lines[type] += [line]
+        # fix the below line for your favorite language
+        functions = method_match(line)
+        modified_functions[type] += functions
+
+    added_functions = set(modified_functions['added']) - set(modified_functions['deleted'])
+    removed_functions = set(modified_functions['deleted']) - set(modified_functions['added'])
+
+    added_line_count = len(modified_lines['added'])
+    deleted_line_count = len(modified_lines['deleted'])
+
+    added_lines = [line.strip() for line in modified_lines['added']]
+    deleted_lines = [line.strip() for line in modified_lines['deleted']]
+    moved_line_count = len(set(added_lines).intersection(set(deleted_lines)))
+
+    return added_functions, removed_functions, added_line_count, deleted_line_count, moved_line_count
+
+def report(added_functions, removed_functions, added_line_count, deleted_line_count, moved_line_count):
+    """ report the result """
+
+    # print modified functions
+    if added_functions or removed_functions:
+        print 'modified functions'
+        if added_functions:
+            print "\t" + str(len(added_functions)) + ' function(s) added'
+            for function in added_functions:
+                print "\t\t" + function
+
+            print ''
+
+        if removed_functions:
+            print "\t" + str(len(removed_functions)) + ' function(s) removed'
+            for function in removed_functions:
+                print "\t\t" + function
+
+            print ''
+
+    # print modified loc
+    if added_line_count or deleted_line_count or moved_line_count:
+        real_deleted_line_count = deleted_line_count - moved_line_count
+        real_added_line_count = added_line_count - moved_line_count
+        increased_line_count = added_line_count - deleted_line_count
+
+        sz = max(
+            len(str(real_deleted_line_count)),
+            len(str(real_added_line_count)),
+            len(str(increased_line_count)),
+        )
+
+        sign = '+' if (increased_line_count > 0) else ' '
+
+        # e.g)
+        # modified lines
+        #      29 lines moved
+        #      62 lines deleted
+        #      26 lines added
+        #    ---------------------
+        #     -36 lines increased
+        result = [
+            'modified lines',
+            ("\t %" + str(sz) + "s lines moved") % moved_line_count,
+            ("\t %" + str(sz) + "s lines deleted") % (real_deleted_line_count),
+            ("\t %" + str(sz) + "s lines added") % (real_added_line_count),
+            ("\t%s%" + str(sz) + "s lines") % (sign, increased_line_count),
+        ]
+
+        # bar is "---------------------"
+        bar = "\t" + ('-' * max([len(line) for line in result]))
+
+        result = result[:4] + [bar] + result[4:]
+
+        print '\n'.join(result)
+
+def main():
+    """main function"""
+    parser = OptionParser()
+    parser.usage = '%prog [options]... [PATCHFILE]'
+    options, args = parser.parse_args()
+
+    if len(args) > 0:
+        diff = open(args[0]).read()
+    else:
+        diff = sys.stdin.read()
+
+    lines = diff.split(os.linesep)
+
+    report(*analysis(lines))
+
+if __name__ == '__main__':
+    main()
